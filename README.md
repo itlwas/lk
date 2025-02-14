@@ -2,24 +2,27 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**`lk`** is a powerful and user-friendly command-line tool for Windows, designed as an enhanced alternative to the standard `ls` or `dir` commands. It provides a rich set of features for listing directories and files with improved readability, sorting, filtering, and interactive capabilities.
+**`lk`** is a powerful and user-friendly command-line tool for Windows, designed as an enhanced alternative to the standard `ls` or `dir` commands. It provides a rich set of features for listing directories and files with improved readability, sorting, filtering, and advanced customization options.
 
 ## ✨ Key Features
 
 `lk` goes beyond basic directory listing, offering a range of options to tailor the output to your needs:
 
-*   **Colorized Output:**  Visually distinguish file types with colors (binaries, folders, symlinks).
-*   **Detailed Information:**  Display file attributes, sizes (human-readable), modification and creation times, and even file owners in long listing format.
+*   **Colorized Output:** Visually distinguish file types with colors (binaries, folders, symlinks).
+*   **Detailed Information:** Display file attributes, sizes (human-readable), modification and creation times, and even file owners in long listing format.
 *   **Versatile Sorting:** Sort files by name (natural sort for numbers), size, modification time, or extension, in forward or reverse order.
-*   **Directory Grouping:**  Option to group directories first for clearer organization.
-*   **Recursive Listing:**  Explore subdirectories recursively with `-R` option.
+*   **Directory Grouping:** Option to group directories first for clearer organization.
+*   **Recursive Listing:** Explore subdirectories recursively with `-R` option.
 *   **Tree View:** Visualize directory structure as a tree with `-T` option for a hierarchical overview.
 *   **File Filtering:** Filter files by name using a simple pattern.
-*   **Interactive Mode:**  Engage with your file system directly from the command line with interactive commands for navigation, file operations, and option toggling.
 *   **Summary Information:** Get a quick summary of directories, files, and total size within a directory.
 *   **File Preview:** Preview the first 10 lines of text files directly in the terminal.
 *   **Full Path Display:** Show the full path of files for clarity.
 *   **Hidden Files:** Option to show hidden files with `-a`.
+
+## ❌ Removed Feature
+
+- **Interactive Mode:** Removed due to lack of necessity and low usage.
 
 ## 🚀 Usage
 
@@ -35,114 +38,37 @@ If no directory is specified, `lk` will list the contents of the current directo
 
 `lk` supports a variety of options to customize its behavior. Here's a comprehensive list:
 
-| Option | Description                                      |
-| :----- | :----------------------------------------------- |
-| `-a`   | Show hidden files.                               |
-| `-l`   | Use long listing format (attributes, size, dates). |
-| `-R`   | Recursively list subdirectories.                  |
-| `-S`   | Sort by file size.                               |
-| `-t`   | Sort by modification time.                        |
-| `-X`   | Sort by file extension.                          |
-| `-r`   | Reverse sort order.                             |
-| `-H`   | Use human-readable file sizes (e.g., KB, MB, GB). |
-| `-F`   | Append file type indicator (`/`, `@`, `*`).     |
-| `-d`   | List directory entry itself, not its contents.   |
-| `-G`   | Group directories first.                          |
-| `-E`   | Show file creation time (long format).           |
-| `-T`   | Tree view of directory structure.                |
-| `-N`   | Natural sorting (numbers compared naturally).    |
-| `-P`   | Show full file path.                             |
-| `-O`   | Display file owner in long listing.              |
-| `-M`   | Show summary (directories, files, total size).   |
-| `-I`   | Run in interactive mode.                          |
-| `-h`, `--help` | Display this help message.                  |
-| `-v`, `--version` | Display version information.               |
+```
+Usage: lk [options] [path ...]
 
-### Examples
-
-*   **Basic listing of the current directory:**
-    ```bash
-    lk
-    ```
-
-*   **Long listing format with human-readable sizes:**
-    ```bash
-    lk -lh
-    ```
-
-*   **Recursive listing of a specific directory, sorted by size:**
-    ```bash
-    lk -RS C:\path\to\directory
-    ```
-
-*   **Start interactive mode:**
-    ```bash
-    lk -I
-    ```
-
-## 🕹️ Interactive Mode
-
-Run `lk` with the `-I` option to enter interactive mode. This mode provides a command-line interface within `lk` to navigate and interact with your file system.
-
-**Interactive Commands:**
-
-| Command             | Description                                            |
-| :------------------ | :----------------------------------------------------- |
-| `cd <path>`         | Change the current directory.                           |
-| `preview <file>`    | Preview the first 10 lines of a text file.             |
-| `filter <pattern>`  | Set file name filter (or `filter` to clear).            |
-| `summary`           | Show directory summary (directories, files, size).     |
-| `open <file>`       | Open file with associated application.                 |
-| `rename <old> <new>`| Rename a file or directory.                           |
-| `delete <file>`     | Delete a file or directory.                             |
-| `mkdir <dir>`       | Create a new directory.                                |
-| `touch <file>`      | Create an empty file.                                  |
-| `copy <src> <dst>`  | Copy a file from source to destination.                 |
-| `move <src> <dst>`  | Move (rename) a file from source to destination.        |
-| `exec <command>`    | Execute a system command.                              |
-| `info <file>`       | Display detailed file information.                      |
-| `:<flags>`          | Toggle options using flags (e.g., `:alHr`). See flags below. |
-| `help`              | Display interactive command help.                       |
-| `q` or `:q`        | Quit interactive mode.                                 |
-
-**Interactive Flags (toggled with `:` prefix):**
-
-| Flag | Option                      |
-| :--- | :-------------------------- |
-| `a`  | Show hidden files           |
-| `l`  | Long listing format         |
-| `R`  | Recursive listing           |
-| `S`  | Sort by size                |
-| `t`  | Sort by time                |
-| `X`  | Sort by extension           |
-| `r`  | Reverse sort order          |
-| `H` or `h`| Human-readable sizes      |
-| `F`  | File type indicator         |
-| `d`  | List directories themselves |
-| `G`  | Group directories first     |
-| `E`  | Show creation time          |
-| `T`  | Tree view                   |
-| `N`  | Natural sorting             |
-| `P`  | Show full path              |
-| `O`  | Display file owner          |
-| `M` or `m`| Show summary              |
-
-**Example in Interactive Mode:**
-
-```bash
-lk> :lH  // Enable long listing and human-readable sizes
-lk> cd C:\Users\Documents
-lk> preview my_document.txt
-lk> summary
-lk> :q     // Quit interactive mode
+Options:
+  -a, --all         Show hidden files
+  -s, --short       Use short format (disable long listing)
+  -R                Recursively list subdirectories
+  -S                Sort by file size
+  -t                Sort by modification time
+  -x                Sort by file extension
+  -r                Reverse sort order
+  -b, --bytes       Show file sizes in raw bytes (default: human-readable)
+  -F                Append file type indicator (default: on)
+  -d                List directory entry itself, not its contents
+  -n, --no-group    Do not group directories first (default: grouped)
+  -E                Show file creation time
+  -T                Tree view of directory structure
+  -N                Disable natural sorting
+  -P                Show full file path
+  -O                Display file owner
+  -M                Show summary (default: on)
+  -h, --help        Display this help message
+  -v, --version     Display version information
 ```
 
 ## 🛠️ Compilation
 
 To compile `lk`, you'll need a C compiler for Windows, such as:
 
-*   **MinGW-w64 (GCC for Windows):**  Recommended for its ease of use and compatibility.
-*   **Visual Studio:**  If you have Visual Studio installed, you can use its command-line compiler.
+*   **MinGW-w64 (GCC for Windows):** Recommended for its ease of use and compatibility.
+*   **Visual Studio:** If you have Visual Studio installed, you can use its command-line compiler.
 
 **Using MinGW-w64 (GCC):**
 
@@ -176,4 +102,5 @@ This project is licensed under the **MIT License**. See the `LICENSE` file for d
 
 ---
 
-Made with ❤️ for Windows command-line users.  Enjoy!
+Made with ❤️ for Windows command-line users. Enjoy!
+
