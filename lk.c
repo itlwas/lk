@@ -8,7 +8,7 @@
 
 /* Forward declarations */
 int getFileOwner(const char *filePath, char *owner, DWORD ownerSize);
-static WORD getColorForFile(const WIN32_FIND_DATAA *data, WORD defaultAttr);
+static inline WORD getColorForFile(const WIN32_FIND_DATAA *data, WORD defaultAttr);
 
 /* Macro for initial capacity of dynamic arrays */
 #define INITIAL_CAPACITY 128
@@ -74,7 +74,7 @@ static void fileTimeToString(const FILETIME *ft, char *buffer, size_t size);
 static void formatSize(ULONGLONG size, char *buffer, size_t bufferSize, int humanReadable);
 static int naturalCompare(const char *a, const char *b);
 static int compareEntries(const void *a, const void *b);
-static void ClearLineToEnd(HANDLE hConsole, WORD attr);
+static void clearLineToEnd(HANDLE hConsole, WORD attr);
 static void printFileEntry(const char *directory, int index, const FileEntry *entry, HANDLE hConsole, WORD defaultAttr);
 static void readDirectory(const char *path, FileList *list);
 static inline void printHeader(const char *path);
@@ -82,7 +82,7 @@ static void listDirectory(const char *path, HANDLE hConsole, WORD defaultAttr);
 static void listDirectorySelf(const char *path, HANDLE hConsole, WORD defaultAttr);
 static void treeDirectory(const char *path, HANDLE hConsole, WORD defaultAttr, int indent);
 
-/* Advanced error handler: prints error message and exits */
+/* Helper function: Prints a fatal error message and exits the program */
 static void fatalError(const char *msg) {
     fprintf(stderr, "Fatal error: %s\n", msg);
     exit(EXIT_FAILURE);
@@ -92,16 +92,16 @@ static void fatalError(const char *msg) {
 static void initFileList(FileList *list) {
     list->count = 0;
     list->capacity = INITIAL_CAPACITY;
-    list->entries = malloc(list->capacity * sizeof(FileEntry));
+    list->entries = (FileEntry *)malloc(list->capacity * sizeof(FileEntry));
     if (!list->entries)
         fatalError("Memory allocation error for FileList.");
 }
 
 /* Adds a file entry to the FileList */
 static void addFileEntry(FileList *list, const WIN32_FIND_DATAA *data) {
-    if (list->count == list->capacity) {
+    if (list->count >= list->capacity) {
         list->capacity *= 2;
-        FileEntry *temp = realloc(list->entries, list->capacity * sizeof(FileEntry));
+        FileEntry *temp = (FileEntry *)realloc(list->entries, list->capacity * sizeof(FileEntry));
         if (!temp)
             fatalError("Memory reallocation error for FileList.");
         list->entries = temp;
@@ -116,29 +116,34 @@ static void freeFileList(FileList *list) {
     list->count = list->capacity = 0;
 }
 
-/* Joins a base path and a child component into a result buffer */
-static inline void joinPath(const char *base, const char *child, char *result, size_t size) {
-    size_t baseLen = strlen(base), childLen = strlen(child);
-    if (baseLen == 0) {
-        if (childLen + 1 <= size)
-            memcpy(result, child, childLen + 1);
-        return;
-    }
-    memcpy(result, base, baseLen);
-    if (base[baseLen - 1] != '\\' && base[baseLen - 1] != '/')
-        if (baseLen + 1 < size) result[baseLen++] = '\\';
-    if (baseLen + childLen + 1 <= size)
-        memcpy(result + baseLen, child, childLen + 1);
+/* Fast ASCII lower-case conversion (optimized for performance) */
+static inline int fast_tolower(int c) {
+    return (c >= 'A' && c <= 'Z') ? (c | 0x20) : c;
 }
 
-/* Checks if a file is considered binary based on its extension */
+/* Optimized path-joining function.
+ * Safely concatenates a base path and a child component into the result buffer.
+ */
+static inline void joinPath(const char *base, const char *child, char *result, size_t size) {
+    if (!base || !child || !result || size == 0)
+        return;
+    size_t baseLen = strlen(base);
+    int needsSlash = (baseLen && (base[baseLen - 1] != '\\' && base[baseLen - 1] != '/'));
+    if (needsSlash)
+        snprintf(result, size, "%s\\%s", base, child);
+    else
+        snprintf(result, size, "%s%s", base, child);
+}
+
+/* Optimized check to determine if a file is binary based on its extension */
 static inline int isBinaryFile(const char *filename) {
     static const char *extensions[] = { ".exe", ".dll", ".bin", ".com", ".bat", ".cmd", NULL };
     const char *dot = strrchr(filename, '.');
-    if (dot) {
-        for (int i = 0; extensions[i]; i++)
-            if (_stricmp(dot, extensions[i]) == 0)
-                return 1;
+    if (!dot)
+        return 0;
+    for (int i = 0; extensions[i]; i++) {
+        if (_stricmp(dot, extensions[i]) == 0)
+            return 1;
     }
     return 0;
 }
@@ -160,83 +165,92 @@ static void fileTimeToString(const FILETIME *ft, char *buffer, size_t size) {
     FileTimeToSystemTime(ft, &stUTC);
     SystemTimeToTzSpecificLocalTime(NULL, &stUTC, &stLocal);
     if (size >= 20)
-        sprintf(buffer, "%04d-%02d-%02d %02d:%02d:%02d",
-                stLocal.wYear, stLocal.wMonth, stLocal.wDay,
-                stLocal.wHour, stLocal.wMinute, stLocal.wSecond);
+        snprintf(buffer, size, "%04d-%02d-%02d %02d:%02d:%02d",
+                 stLocal.wYear, stLocal.wMonth, stLocal.wDay,
+                 stLocal.wHour, stLocal.wMinute, stLocal.wSecond);
 }
 
 /* Formats the file size. If humanReadable is true, scales the size to appropriate units */
 static void formatSize(ULONGLONG size, char *buffer, size_t bufferSize, int humanReadable) {
     if (!humanReadable) {
-        sprintf(buffer, "%llu", size);
+        snprintf(buffer, bufferSize, "%llu", size);
         return;
     }
     const char *suffixes[] = { "B", "K", "M", "G", "T", "P" };
     int i = 0;
     double s = (double)size;
     while (s >= 1024 && i < 5) { s /= 1024; i++; }
-    sprintf(buffer, "%.1f%s", s, suffixes[i]);
+    snprintf(buffer, bufferSize, "%.1f%s", s, suffixes[i]);
 }
 
-/* Compares two strings using natural order */
+/* Optimized natural string comparison function.
+ * Compares two strings, treating numerical substrings in a natural order.
+ */
 static int naturalCompare(const char *a, const char *b) {
     while (*a && *b) {
         if (isdigit((unsigned char)*a) && isdigit((unsigned char)*b)) {
-            char *endA, *endB;
-            long numA = strtol(a, &endA, 10);
-            long numB = strtol(b, &endB, 10);
+            unsigned long numA = 0, numB = 0;
+            while (isdigit((unsigned char)*a))
+                numA = numA * 10 + (*a++ - '0');
+            while (isdigit((unsigned char)*b))
+                numB = numB * 10 + (*b++ - '0');
             if (numA != numB)
                 return (numA < numB) ? -1 : 1;
-            a = endA; b = endB;
         } else {
-            char ca = tolower((unsigned char)*a), cb = tolower((unsigned char)*b);
+            int ca = fast_tolower((unsigned char)*a);
+            int cb = fast_tolower((unsigned char)*b);
             if (ca != cb)
-                return (ca < cb) ? -1 : 1;
-            a++; b++;
+                return ca - cb;
+            a++; 
+            b++;
         }
     }
-    return (*a == *b) ? 0 : ((*a) ? 1 : -1);
+    return (*a) ? 1 : ((*b) ? -1 : 0);
 }
 
-/* Comparison function for sorting file entries */
+/* Optimized comparison function for file entries.
+ * Supports grouping directories, sorting by time, size, extension, and natural/lexicographical order.
+ */
 static int compareEntries(const void *a, const void *b) {
-    const FileEntry *fa = a, *fb = b;
-    if (g_options.groupDirs) {
-        int aIsDir = (fa->findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 1 : 0;
-        int bIsDir = (fb->findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 1 : 0;
-        if (aIsDir != bIsDir)
-            return (aIsDir > bIsDir) ? -1 : 1;
-    }
+    const FileEntry *fa = (const FileEntry *)a;
+    const FileEntry *fb = (const FileEntry *)b;
+    int aIsDir = (fa->findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+    int bIsDir = (fb->findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+
+    if (g_options.groupDirs && aIsDir != bIsDir)
+        return aIsDir ? -1 : 1;
+
     if (g_options.sortByTime) {
         ULONGLONG ta = (((ULONGLONG)fa->findData.ftLastWriteTime.dwHighDateTime << 32) |
-                         fa->findData.ftLastWriteTime.dwLowDateTime);
+                        fa->findData.ftLastWriteTime.dwLowDateTime);
         ULONGLONG tb = (((ULONGLONG)fb->findData.ftLastWriteTime.dwHighDateTime << 32) |
-                         fb->findData.ftLastWriteTime.dwLowDateTime);
+                        fb->findData.ftLastWriteTime.dwLowDateTime);
         if (ta != tb)
-            return (ta < tb) ? (g_options.reverseSort ? 1 : -1)
-                             : (g_options.reverseSort ? -1 : 1);
-    } else if (g_options.sortBySize) {
+            return g_options.reverseSort ? ((ta < tb) ? 1 : -1) : ((ta < tb) ? -1 : 1);
+    }
+    if (g_options.sortBySize) {
         ULONGLONG sa = (((ULONGLONG)fa->findData.nFileSizeHigh << 32) | fa->findData.nFileSizeLow);
         ULONGLONG sb = (((ULONGLONG)fb->findData.nFileSizeHigh << 32) | fb->findData.nFileSizeLow);
         if (sa != sb)
-            return (sa < sb) ? (g_options.reverseSort ? 1 : -1)
-                             : (g_options.reverseSort ? -1 : 1);
-    } else if (g_options.sortByExtension) {
+            return g_options.reverseSort ? ((sa < sb) ? 1 : -1) : ((sa < sb) ? -1 : 1);
+    }
+    if (g_options.sortByExtension) {
         const char *extA = strrchr(fa->findData.cFileName, '.');
         const char *extB = strrchr(fb->findData.cFileName, '.');
         if (extA && extB) {
-            int cmp = _stricmp(extA, extB);
-            if (cmp)
-                return g_options.reverseSort ? -cmp : cmp;
+            int result = _stricmp(extA, extB);
+            if (result)
+                return g_options.reverseSort ? -result : result;
         }
     }
-    int cmp = (g_options.naturalSort) ? naturalCompare(fa->findData.cFileName, fb->findData.cFileName)
-                                      : _stricmp(fa->findData.cFileName, fb->findData.cFileName);
-    return g_options.reverseSort ? -cmp : cmp;
+    int result = g_options.naturalSort ?
+                 naturalCompare(fa->findData.cFileName, fb->findData.cFileName) :
+                 _stricmp(fa->findData.cFileName, fb->findData.cFileName);
+    return g_options.reverseSort ? -result : result;
 }
 
 /* Clears the remainder of the current console line */
-static void ClearLineToEnd(HANDLE hConsole, WORD attr) {
+static void clearLineToEnd(HANDLE hConsole, WORD attr) {
     CONSOLE_SCREEN_BUFFER_INFO csbi;
     if (!GetConsoleScreenBufferInfo(hConsole, &csbi))
         return;
@@ -248,67 +262,84 @@ static void ClearLineToEnd(HANDLE hConsole, WORD attr) {
     }
 }
 
-/* Prints a single file entry according to options */
+/* Optimized function to print a file or directory entry.
+ * Displays detailed information based on the specified options.
+ */
 static void printFileEntry(const char *directory, int index, const FileEntry *entry, HANDLE hConsole, WORD defaultAttr) {
     const WIN32_FIND_DATAA *data = &entry->findData;
-    int isDir = (data->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-    WORD baseBG = defaultAttr & 0xF0;
-    WORD rowBG = (index % 2) ? (baseBG | BACKGROUND_INTENSITY) : baseBG;
+    const int isDir = (data->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+    const WORD baseBG = defaultAttr & 0xF0;
+    const WORD rowBG = (index & 1) ? (baseBG | BACKGROUND_INTENSITY) : baseBG;
+
+    /* Set alternate row background for improved readability */
     SetConsoleTextAttribute(hConsole, GRAY_TEXT | rowBG);
     printf("%3d. ", index);
+
     if (g_options.longFormat) {
-        char attrStr[8];
+        char attrStr[6];
         formatAttributes(data->dwFileAttributes, isDir, attrStr, sizeof(attrStr));
-        LARGE_INTEGER filesize;
-        filesize.LowPart = data->nFileSizeLow;
-        filesize.HighPart = data->nFileSizeHigh;
+
         char sizeStr[32];
         if (isDir)
-            strcpy(sizeStr, "<DIR>");
-        else
-            formatSize(filesize.QuadPart, sizeStr, sizeof(sizeStr), g_options.humanSize);
-        char modTimeStr[32], createTimeStr[32] = "";
+            strncpy(sizeStr, "<DIR>", sizeof(sizeStr) - 1);
+        else {
+            ULARGE_INTEGER fileSize;
+            fileSize.LowPart = data->nFileSizeLow;
+            fileSize.HighPart = data->nFileSizeHigh;
+            formatSize(fileSize.QuadPart, sizeStr, sizeof(sizeStr), g_options.humanSize);
+        }
+
+        char modTimeStr[32];
         fileTimeToString(&data->ftLastWriteTime, modTimeStr, sizeof(modTimeStr));
-        if (g_options.showCreationTime)
-            fileTimeToString(&data->ftCreationTime, createTimeStr, sizeof(createTimeStr));
+
         if (g_options.showOwner) {
-            if (g_options.showCreationTime)
-                printf("%-6s %12s %20s %20s ", attrStr, sizeStr, createTimeStr, modTimeStr);
-            else
-                printf("%-6s %12s %20s ", attrStr, sizeStr, modTimeStr);
             char fullPath[MAX_PATH];
             joinPath(directory, data->cFileName, fullPath, MAX_PATH);
-            char owner[256] = "";
-            printf("%-20s ", getFileOwner(fullPath, owner, sizeof(owner)) ? owner : "Unknown");
+            char owner[256] = "Unknown";
+            getFileOwner(fullPath, owner, sizeof(owner));
+            if (g_options.showCreationTime) {
+                char createTimeStr[32];
+                fileTimeToString(&data->ftCreationTime, createTimeStr, sizeof(createTimeStr));
+                printf("%-6s %12s %20s %20s %-20s ", attrStr, sizeStr, createTimeStr, modTimeStr, owner);
+            } else {
+                printf("%-6s %12s %20s %-20s ", attrStr, sizeStr, modTimeStr, owner);
+            }
         } else {
-            if (g_options.showCreationTime)
+            if (g_options.showCreationTime) {
+                char createTimeStr[32];
+                fileTimeToString(&data->ftCreationTime, createTimeStr, sizeof(createTimeStr));
                 printf("%-6s %12s %20s %20s ", attrStr, sizeStr, createTimeStr, modTimeStr);
-            else
+            } else {
                 printf("%-6s %12s %20s ", attrStr, sizeStr, modTimeStr);
+            }
         }
     }
-    /* File type indicator: only for directories and reparse points */
+
     if (g_options.fileTypeIndicator) {
         if (data->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-            printf("/");
+            putchar('/');
         else if (data->dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
-            printf("@");
+            putchar('@');
     }
+
+    /* Set file color based on its type */
     WORD fileColor = getColorForFile(data, defaultAttr);
     SetConsoleTextAttribute(hConsole, (fileColor & 0x0F) | rowBG);
     printf("%s", data->cFileName);
+
     if (g_options.showFullPath) {
         char fullPath[MAX_PATH];
         joinPath(directory, data->cFileName, fullPath, MAX_PATH);
         printf(" (%s)", fullPath);
     }
-    ClearLineToEnd(hConsole, defaultAttr);
-    printf("\n");
+
+    clearLineToEnd(hConsole, defaultAttr);
+    putchar('\n');
     SetConsoleTextAttribute(hConsole, defaultAttr);
 }
 
 /* Returns a color based on the file type */
-static WORD getColorForFile(const WIN32_FIND_DATAA *data, WORD defaultAttr) {
+static inline WORD getColorForFile(const WIN32_FIND_DATAA *data, WORD defaultAttr) {
     if (data->dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
         return SYMLINK_COLOR;
     if (data->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
@@ -316,22 +347,83 @@ static WORD getColorForFile(const WIN32_FIND_DATAA *data, WORD defaultAttr) {
     return isBinaryFile(data->cFileName) ? BINARY_COLOR : defaultAttr;
 }
 
-/* Reads the contents of a directory into the FileList, applying filters */
+/* Optimized wildcard pattern matching function.
+ * Supports '*' (matches zero or more characters) and '?' (matches exactly one character).
+ */
+static int wildcardMatch(const char *pattern, const char *str) {
+    const char *star = NULL;
+    const char *s = str, *p = pattern;
+    while (*s) {
+        if (*p == '?' || fast_tolower((unsigned char)*p) == fast_tolower((unsigned char)*s)) {
+            p++;
+            s++;
+        } else if (*p == '*') {
+            star = p++;
+        } else if (star) {
+            p = star + 1;
+            s++;
+        } else {
+            return 0;
+        }
+    }
+    while (*p == '*')
+        p++;
+    return (*p == '\0');
+}
+
+/* Optimized directory reading function with optional pattern filtering.
+ * Reads the contents of the specified directory and applies a wildcard filter if provided.
+ */
 static void readDirectory(const char *path, FileList *list) {
+    char directory[MAX_PATH] = {0};
+    char wildcard[256] = {0};
+
+    if (strchr(path, '*') || strchr(path, '?')) {
+        const char *sep = strrchr(path, '\\');
+        if (!sep)
+            sep = strrchr(path, '/');
+        if (sep) {
+            size_t dirLen = sep - path;
+            if (dirLen >= MAX_PATH)
+                dirLen = MAX_PATH - 1;
+            memcpy(directory, path, dirLen);
+            directory[dirLen] = '\0';
+            strncpy(wildcard, sep + 1, sizeof(wildcard) - 1);
+            wildcard[sizeof(wildcard) - 1] = '\0';
+        } else {
+            strcpy(directory, ".");
+            strncpy(wildcard, path, sizeof(wildcard) - 1);
+            wildcard[sizeof(wildcard) - 1] = '\0';
+        }
+    } else {
+        strcpy(directory, path);
+        if (g_options.filterPattern[0])
+            strncpy(wildcard, g_options.filterPattern, sizeof(wildcard) - 1);
+        else
+            wildcard[0] = '\0';
+    }
+
     char searchPath[MAX_PATH];
-    sprintf(searchPath, "%s\\*", path);
+    snprintf(searchPath, sizeof(searchPath), "%s\\*", directory);
+
     WIN32_FIND_DATAA findData;
     HANDLE hFind = FindFirstFileExA(searchPath, FindExInfoStandard, &findData,
                                      FindExSearchNameMatch, NULL, FIND_FIRST_EX_LARGE_FETCH);
-    if (hFind == INVALID_HANDLE_VALUE)
+    if (hFind == INVALID_HANDLE_VALUE) {
+        fprintf(stderr, "Error: Unable to open directory %s (Error %lu)\n", directory, GetLastError());
         return;
-    size_t filterLen = strlen(g_options.filterPattern);
+    }
+
+    const size_t wildcardLen = strlen(wildcard);
     do {
-        if (!strcmp(findData.cFileName, ".") || !strcmp(findData.cFileName, ".."))
+        /* Skip the "." and ".." entries */
+        if (findData.cFileName[0] == '.' &&
+           (findData.cFileName[1] == '\0' ||
+            (findData.cFileName[1] == '.' && findData.cFileName[2] == '\0')))
             continue;
         if (!g_options.showAll && (findData.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN))
             continue;
-        if (filterLen && !strstr(findData.cFileName, g_options.filterPattern))
+        if (wildcardLen && !wildcardMatch(wildcard, findData.cFileName))
             continue;
         addFileEntry(list, &findData);
     } while (FindNextFileA(hFind, &findData));
@@ -340,9 +432,9 @@ static void readDirectory(const char *path, FileList *list) {
 
 /* Prints the header for a directory listing */
 static inline void printHeader(const char *path) {
-    char absPath[MAX_PATH];
+    char absPath[MAX_PATH] = {0};
     if (!GetFullPathNameA(path, MAX_PATH, absPath, NULL))
-        strcpy(absPath, path);
+        strncpy(absPath, path, MAX_PATH - 1);
     printf("\n[%s]:\n", absPath);
     if (g_options.longFormat) {
         if (g_options.showOwner) {
@@ -361,16 +453,20 @@ static inline void printHeader(const char *path) {
     }
 }
 
-/* Lists directory contents (with recursion if enabled) */
+/* Lists directory contents and prints a summary */
 static void listDirectory(const char *path, HANDLE hConsole, WORD defaultAttr) {
     FileList list;
     initFileList(&list);
     readDirectory(path, &list);
-    if (list.count)
+    
+    if (list.count > 0)
         qsort(list.entries, list.count, sizeof(FileEntry), compareEntries);
+    
     printHeader(path);
+    
     for (size_t i = 0; i < list.count; i++)
         printFileEntry(path, (int)(i + 1), &list.entries[i], hConsole, defaultAttr);
+    
     if (g_options.showSummary) {
         int dirCount = 0, fileCount = 0;
         ULONGLONG totalSize = 0;
@@ -380,26 +476,28 @@ static void listDirectory(const char *path, HANDLE hConsole, WORD defaultAttr) {
                 dirCount++;
             else {
                 fileCount++;
-                LARGE_INTEGER fs;
+                ULARGE_INTEGER fs;
                 fs.LowPart = d->nFileSizeLow;
                 fs.HighPart = d->nFileSizeHigh;
                 totalSize += fs.QuadPart;
             }
         }
-        char sizeStr[32];
+        char sizeStr[32] = {0};
         formatSize(totalSize, sizeStr, sizeof(sizeStr), g_options.humanSize);
         printf("\nSummary: %d directories, %d files, total size: %s\n", dirCount, fileCount, sizeStr);
     }
+    
     if (g_options.recursive && !g_options.treeView) {
         for (size_t i = 0; i < list.count; i++) {
             const WIN32_FIND_DATAA *data = &list.entries[i].findData;
             if (data->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-                char newPath[MAX_PATH];
+                char newPath[MAX_PATH] = {0};
                 joinPath(path, data->cFileName, newPath, MAX_PATH);
                 listDirectory(newPath, hConsole, defaultAttr);
             }
         }
     }
+    
     freeFileList(&list);
 }
 
@@ -418,27 +516,36 @@ static void listDirectorySelf(const char *path, HANDLE hConsole, WORD defaultAtt
     printFileEntry(path, 1, &entry, hConsole, defaultAttr);
 }
 
-/* Displays directory structure in a tree format */
+/* Displays the directory structure in a tree format */
 static void treeDirectory(const char *path, HANDLE hConsole, WORD defaultAttr, int indent) {
     FileList list;
     initFileList(&list);
     readDirectory(path, &list);
-    if (list.count)
+    
+    if (list.count > 0)
         qsort(list.entries, list.count, sizeof(FileEntry), compareEntries);
+    
     char indentBuf[64] = {0};
-    int indentCount = indent < 31 ? indent : 31;
-    for (int i = 0; i < indentCount; i++) {
-        strcat(indentBuf, "  ");
-    }
+    int indentCount = (indent < 31) ? indent : 31;
+    int indentLength = indentCount * 2;
+    if (indentLength >= (int)sizeof(indentBuf))
+        indentLength = sizeof(indentBuf) - 1;
+    memset(indentBuf, ' ', indentLength);
+    indentBuf[indentLength] = '\0';
+    
     for (size_t i = 0; i < list.count; i++) {
         const WIN32_FIND_DATAA *data = &list.entries[i].findData;
-        printf("%s|- [%c] %s\n", indentBuf, (data->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 'D' : 'F', data->cFileName);
+        char typeIndicator = (data->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 'D' : 'F';
+        if (data->dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
+            typeIndicator = '@';
+        printf("%s|- [%c] %s\n", indentBuf, typeIndicator, data->cFileName);
     }
+    
     if (g_options.recursive) {
         for (size_t i = 0; i < list.count; i++) {
             const WIN32_FIND_DATAA *data = &list.entries[i].findData;
             if (data->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-                char newPath[MAX_PATH];
+                char newPath[MAX_PATH] = {0};
                 joinPath(path, data->cFileName, newPath, MAX_PATH);
                 printf("%s|\n", indentBuf);
                 treeDirectory(newPath, hConsole, defaultAttr, indent + 1);
@@ -448,21 +555,28 @@ static void treeDirectory(const char *path, HANDLE hConsole, WORD defaultAttr, i
     freeFileList(&list);
 }
 
-/* Retrieves the file owner. Returns 1 on success, 0 otherwise */
+/* Retrieves the file owner with robust error handling */
 int getFileOwner(const char *filePath, char *owner, DWORD ownerSize) {
     DWORD dwSize = 0;
     if (!GetFileSecurityA(filePath, OWNER_SECURITY_INFORMATION, NULL, 0, &dwSize) &&
-        GetLastError() != ERROR_INSUFFICIENT_BUFFER)
+        GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
+        fprintf(stderr, "Error: Unable to retrieve security info for %s (Error %lu)\n", filePath, GetLastError());
         return 0;
-    PSECURITY_DESCRIPTOR psd = malloc(dwSize);
-    if (!psd) return 0;
+    }
+    PSECURITY_DESCRIPTOR psd = (PSECURITY_DESCRIPTOR)malloc(dwSize);
+    if (!psd) {
+        fprintf(stderr, "Error: Memory allocation failed for security descriptor.\n");
+        return 0;
+    }
     if (!GetFileSecurityA(filePath, OWNER_SECURITY_INFORMATION, psd, dwSize, &dwSize)) {
+        fprintf(stderr, "Error: Failed to get security descriptor for %s (Error %lu)\n", filePath, GetLastError());
         free(psd);
         return 0;
     }
     PSID pSid = NULL;
-    BOOL ownerDefaulted;
+    BOOL ownerDefaulted = FALSE;
     if (!GetSecurityDescriptorOwner(psd, &pSid, &ownerDefaulted)) {
+        fprintf(stderr, "Error: Failed to retrieve owner from security descriptor for %s\n", filePath);
         free(psd);
         return 0;
     }
@@ -470,6 +584,7 @@ int getFileOwner(const char *filePath, char *owner, DWORD ownerSize) {
     DWORD nameSize = sizeof(name), domainSize = sizeof(domain);
     SID_NAME_USE sidType;
     if (!LookupAccountSidA(NULL, pSid, name, &nameSize, domain, &domainSize, &sidType)) {
+        fprintf(stderr, "Error: LookupAccountSid failed for %s (Error %lu)\n", filePath, GetLastError());
         free(psd);
         return 0;
     }
@@ -509,7 +624,7 @@ int main(int argc, char *argv[]) {
         "  lk -R C:\\path\\to\\directory\n\n";
 
     int fileCount = 0, filesCapacity = 16;
-    char **files = malloc(filesCapacity * sizeof(char *));
+    char **files = (char **)malloc(filesCapacity * sizeof(char *));
     if (!files)
         fatalError("Memory allocation error for files array.");
     for (int i = 1; i < argc; i++) {
@@ -529,7 +644,7 @@ int main(int argc, char *argv[]) {
                     return EXIT_SUCCESS;
                 }
                 else if (!strcmp(argv[i], "--version")) {
-                    printf("lk version 1.3\n");
+                    printf("lk version 1.4\n");
                     free(files);
                     return EXIT_SUCCESS;
                 }
@@ -565,7 +680,7 @@ int main(int argc, char *argv[]) {
                             free(files);
                             return EXIT_SUCCESS;
                         case 'v':
-                            printf("lk version 1.2\n");
+                            printf("lk version 1.4\n");
                             free(files);
                             return EXIT_SUCCESS;
                         default:
@@ -579,7 +694,7 @@ int main(int argc, char *argv[]) {
         } else {
             if (fileCount >= filesCapacity) {
                 filesCapacity *= 2;
-                char **temp = realloc(files, filesCapacity * sizeof(char *));
+                char **temp = (char **)realloc(files, filesCapacity * sizeof(char *));
                 if (!temp)
                     fatalError("Memory reallocation error for files array.");
                 files = temp;
@@ -591,11 +706,11 @@ int main(int argc, char *argv[]) {
         files[0] = ".";
         fileCount = 1;
     }
-    char **absPaths = malloc(fileCount * sizeof(char *));
+    char **absPaths = (char **)malloc(fileCount * sizeof(char *));
     if (!absPaths)
         fatalError("Memory allocation error for absolute paths array.");
     for (int i = 0; i < fileCount; i++) {
-        absPaths[i] = malloc(MAX_PATH);
+        absPaths[i] = (char *)malloc(MAX_PATH);
         if (!absPaths[i])
             fatalError("Memory allocation error for an absolute path.");
         if (!GetFullPathNameA(files[i], MAX_PATH, absPaths[i], NULL)) {
