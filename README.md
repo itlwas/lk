@@ -16,7 +16,6 @@
   - [Using Visual Studio](#using-visual-studio)
 - [Usage](#usage)
 - [Command-Line Options](#command-line-options)
-- [Examples](#examples)
 - [License](#license)
 
 ## Features
