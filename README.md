@@ -94,25 +94,6 @@ Options:
   -v, --version     Display version information.
 ```
 
-## Examples
-
-- **Basic Listing**:
-    ```bash
-    lk
-    ```
-- **Detailed Listing with Hidden Files**:
-    ```bash
-    lk -a
-    ```
-- **Recursive Listing Sorted by Modification Time**:
-    ```bash
-    lk -tR
-    ```
-- **Tree View with Full Paths**:
-    ```bash
-    lk -T -P
-    ```
-
 ## License
 
 This project is licensed under the **MIT License**. See the [LICENSE](LICENSE) file for details.
