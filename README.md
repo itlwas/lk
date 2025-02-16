@@ -2,7 +2,7 @@
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/itlwas/lk/actions)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-1.4-blue.svg)](https://github.com/itlwas/lk/releases)
+[![Version](https://img.shields.io/badge/version-1.5-blue.svg)](https://github.com/itlwas/lk/releases)
 [![Issues](https://img.shields.io/github/issues/itlwas/lk.svg)](https://github.com/itlwas/lk/issues)
 [![Stars](https://img.shields.io/github/stars/itlwas/lk.svg)](https://github.com/itlwas/lk/stargazers)
 [![Forks](https://img.shields.io/github/forks/itlwas/lk.svg)](https://github.com/itlwas/lk/network)
