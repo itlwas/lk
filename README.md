@@ -99,8 +99,6 @@ Options:
 
 This project is licensed under the **Unlicense**. See the [LICENSE](LICENSE) file for details.
 
-The full text of the Unlicense is available in the repository at [lk/LICENSE](https://github.com/itlwas/lk/blob/main/LICENSE) and can also be reviewed at <https://unlicense.org/>.
-
 ---
 
 Made with ❤️ for Windows command-line enthusiasts. Enjoy!
