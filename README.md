@@ -1,13 +1,15 @@
 # lk - Enhanced Directory Listing for Windows
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/itlwas/lk/actions)
-[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: Unlicense](https://img.shields.io/badge/license-Unlicense-blue.svg)](https://unlicense.org/)
 [![Version](https://img.shields.io/badge/version-1.5-blue.svg)](https://github.com/itlwas/lk/releases)
 [![Issues](https://img.shields.io/github/issues/itlwas/lk.svg)](https://github.com/itlwas/lk/issues)
 [![Stars](https://img.shields.io/github/stars/itlwas/lk.svg)](https://github.com/itlwas/lk/stargazers)
 [![Forks](https://img.shields.io/github/forks/itlwas/lk.svg)](https://github.com/itlwas/lk/network)
 
-**lk** is a powerful and user-friendly command-line tool for Windows, designed as an enhanced alternative to the standard `dir` or `ls` commands. It offers a comprehensive set of features for listing directories and files with improved readability, sorting, filtering, and advanced customization.
+**lk** is a powerful and user-friendly command-line tool for Windows, designed as an enhanced alternative to the standard `dir` or `ls` commands.
+
+> **Note:** This project is solely a personal experiment by [itlwas](https://github.com/itlwas) and is not intended for continuous development. It serves as a proof-of-concept rather than a fully evolving product.
 
 ## Table of Contents
 - [Features](#features)
@@ -95,7 +97,9 @@ Options:
 
 ## License
 
-This project is licensed under the **MIT License**. See the [LICENSE](LICENSE) file for details.
+This project is licensed under the **Unlicense**. See the [LICENSE](LICENSE) file for details.
+
+The full text of the Unlicense is available in the repository at [lk/LICENSE](https://github.com/itlwas/lk/blob/main/LICENSE) and can also be reviewed at <https://unlicense.org/>.
 
 ---
 
