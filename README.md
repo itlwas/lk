@@ -1,4 +1,4 @@
-# lk - Enhanced Directory Listing for Windows
+# 🚀 lk - Enhanced Directory Listing for Windows
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/itlwas/lk/actions)
 [![License](https://img.shields.io/badge/license-Unlicense-blue.svg)](LICENSE)
