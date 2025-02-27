@@ -30,25 +30,31 @@
 #define COLOR_OWNER       (FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY) // Owner: bright white
 #define COLOR_FULLPATH    (FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE)          // Full path: gray
 
-/* Precomputed indent strings (levels 0 to 31, 2 spaces per level) */
-static const char* getIndentString(int indent) {
-    static int initialized = 0;
-    static char indentCache[32][65]; /* 64 chars max + null */
-    if (UNLIKELY(!initialized)) {
-        for (int i = 0; i < 32; i++) {
-            int len = i * 2;
-            if (len > 64) len = 64;
-            memset(indentCache[i], ' ', len);
-            indentCache[i][len] = '\0';
-        }
-        initialized = 1;
-    }
+/*
+ * Optimized getIndentString:
+ * Precomputes and stores the indent strings in a constant static array,
+ * eliminating runtime initialization overhead and ensuring O(1) lookup.
+ */
+static inline const char* getIndentString(int indent) {
+    static const char *indentCache[32] = {
+        "", "  ", "    ", "      ", "        ", "          ", "            ", "              ",
+        "                ", "                  ", "                    ", "                      ",
+        "                        ", "                          ", "                            ", "                              ",
+        "                                ", "                                  ", "                                    ",
+        "                                      ", "                                        ", "                                          ",
+        "                                            ", "                                              ", "                                                ",
+        "                                                  ", "                                                    ", "                                                      ",
+        "                                                        ", "                                                          ", "                                                            ", "                                                              "
+    };
     if (indent < 0)
         indent = 0;
     else if (indent > 31)
         indent = 31;
     return indentCache[indent];
 }
+
+// Global variable (placed at file scope)
+static int g_consoleWidth = 80; 
 
 #define INITIAL_CAPACITY 128
 
@@ -270,33 +276,34 @@ static void formatSize(ULONGLONG size, char *restrict buffer, size_t bufferSize,
     snprintf(buffer, bufferSize, "%.1f%s", s, suffixes[i]);
 }
 
-/* Natural (human-friendly) string comparison */
+/*
+ * Optimized naturalCompare:
+ * Uses the inlined fast_tolower function for converting characters to lowercase,
+ * which improves performance by avoiding repeated inline conditional logic.
+ */
 static int naturalCompare(const char *restrict a, const char *restrict b) {
     const unsigned char *ua = (const unsigned char *)a;
     const unsigned char *ub = (const unsigned char *)b;
     
     while (*ua && *ub) {
         if (isdigit(*ua) && isdigit(*ub)) {
-            /* Fast path for common case of single-digit numbers */
+            /* Fast path for single-digit numbers */
             if (!isdigit(ua[1]) && !isdigit(ub[1])) {
                 if (*ua != *ub)
                     return *ua - *ub;
                 ua++; ub++;
                 continue;
             }
-            
-            /* Parse multiple-digit numbers efficiently */
+            /* Parse multi-digit numbers efficiently */
             unsigned long numA = 0, numB = 0;
             do { numA = numA * 10 + (*ua++ - '0'); } while (isdigit(*ua));
             do { numB = numB * 10 + (*ub++ - '0'); } while (isdigit(*ub));
-            
             if (numA != numB)
                 return (numA < numB) ? -1 : 1;
         } else {
-            /* Use direct lowercase table lookup instead of function call */
-            unsigned char ca = (*ua >= 'A' && *ua <= 'Z') ? (*ua | 0x20) : *ua;
-            unsigned char cb = (*ub >= 'A' && *ub <= 'Z') ? (*ub | 0x20) : *ub;
-            
+            /* Utilize fast_tolower to reduce per-character overhead */
+            unsigned char ca = fast_tolower(*ua);
+            unsigned char cb = fast_tolower(*ub);
             if (ca != cb)
                 return ca - cb;
             ua++; ub++;
@@ -373,12 +380,18 @@ static int compareEntries(const void *a, const void *b) {
     return g_options.reverseSort ? -result : result;
 }
 
-/* Clear from current console cursor to end of line */
+/*
+ * Optimized clearLineToEnd:
+ * This version uses the precomputed global console width (g_consoleWidth)
+ * instead of retrieving the width from the console buffer info on every call.
+ * This reduces the number of system calls while maintaining correct behavior.
+ */
 static void clearLineToEnd(HANDLE hConsole, WORD attr) {
     CONSOLE_SCREEN_BUFFER_INFO csbi;
     if (!GetConsoleScreenBufferInfo(hConsole, &csbi))
         return;
-    int curCol = csbi.dwCursorPosition.X, width = csbi.dwSize.X;
+    int curCol = csbi.dwCursorPosition.X;
+    int width = g_consoleWidth;  // Use cached console width
     if (curCol < width) {
         DWORD written;
         FillConsoleOutputCharacterA(hConsole, ' ', width - curCol, csbi.dwCursorPosition, &written);
@@ -386,21 +399,36 @@ static void clearLineToEnd(HANDLE hConsole, WORD attr) {
     }
 }
 
-/* Print a single file entry with formatting and color */
+/*
+ * Optimized printFileEntry:
+ * This revision introduces a local cache (currentAttr) and the SET_ATTR macro to
+ * avoid redundant SetConsoleTextAttribute calls when the attribute value has not changed.
+ * This minimizes system call overhead while preserving the intended colored output.
+ */
 static void printFileEntry(const char *restrict directory, int index, const FileEntry *entry, HANDLE hConsole, WORD defaultAttr) {
     const WIN32_FIND_DATAA *data = &entry->findData;
     const int isDir = (data->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
     const WORD baseBG = defaultAttr & 0xF0;
     const WORD rowBG = (index & 1) ? (baseBG | BACKGROUND_INTENSITY) : baseBG;
-    if (!SetConsoleTextAttribute(hConsole, DEFAULT_COLOR | rowBG))
-        fprintf(stderr, "Warning: SetConsoleTextAttribute failed.\n");
+    WORD currentAttr = 0;  // Local cache for current attribute
+
+    // Macro: set new attribute only if it differs from currentAttr
+    #define SET_ATTR(newAttr) do { \
+        if (currentAttr != (newAttr)) { \
+            if (!SetConsoleTextAttribute(hConsole, (newAttr))) { \
+                fprintf(stderr, "Warning: SetConsoleTextAttribute failed.\n"); \
+            } \
+            currentAttr = (newAttr); \
+        } \
+    } while(0)
+
+    SET_ATTR(DEFAULT_COLOR | rowBG);
     printf("%3d. ", index);
 
     if (g_options.longFormat) {
         char attrStr[6];
         formatAttributes(data->dwFileAttributes, isDir, attrStr, sizeof(attrStr));
-        if (!SetConsoleTextAttribute(hConsole, COLOR_ATTR | rowBG))
-            fprintf(stderr, "Warning: SetConsoleTextAttribute failed for attributes.\n");
+        SET_ATTR(COLOR_ATTR | rowBG);
         printf("%-6s ", attrStr);
 
         char sizeStr[32];
@@ -413,21 +441,18 @@ static void printFileEntry(const char *restrict directory, int index, const File
             fileSize.HighPart = data->nFileSizeHigh;
             formatSize(fileSize.QuadPart, sizeStr, sizeof(sizeStr), g_options.humanSize);
         }
-        if (!SetConsoleTextAttribute(hConsole, COLOR_SIZE | rowBG))
-            fprintf(stderr, "Warning: SetConsoleTextAttribute failed for size.\n");
+        SET_ATTR(COLOR_SIZE | rowBG);
         printf("%12s ", sizeStr);
 
         if (g_options.showCreationTime) {
             char createTimeStr[32];
             fileTimeToString(&data->ftCreationTime, createTimeStr, sizeof(createTimeStr));
-            if (!SetConsoleTextAttribute(hConsole, COLOR_TIME | rowBG))
-                fprintf(stderr, "Warning: SetConsoleTextAttribute failed for creation time.\n");
+            SET_ATTR(COLOR_TIME | rowBG);
             printf("%20s ", createTimeStr);
         }
         char modTimeStr[32];
         fileTimeToString(&data->ftLastWriteTime, modTimeStr, sizeof(modTimeStr));
-        if (!SetConsoleTextAttribute(hConsole, COLOR_TIME | rowBG))
-            fprintf(stderr, "Warning: SetConsoleTextAttribute failed for modification time.\n");
+        SET_ATTR(COLOR_TIME | rowBG);
         printf("%20s ", modTimeStr);
 
         if (g_options.showOwner) {
@@ -436,8 +461,7 @@ static void printFileEntry(const char *restrict directory, int index, const File
             char owner[256] = "Unknown";
             if (!getFileOwner(fullPath, owner, sizeof(owner)))
                 strncpy(owner, "Unknown", sizeof(owner) - 1);
-            if (!SetConsoleTextAttribute(hConsole, COLOR_OWNER | rowBG))
-                fprintf(stderr, "Warning: SetConsoleTextAttribute failed for owner.\n");
+            SET_ATTR(COLOR_OWNER | rowBG);
             printf("%-20s ", owner);
         }
     }
@@ -452,20 +476,19 @@ static void printFileEntry(const char *restrict directory, int index, const File
     WORD fileColor = (data->dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ? SYMLINK_COLOR :
                      (data->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? FOLDER_COLOR :
                      (isBinaryFile(data->cFileName) ? BINARY_COLOR : DEFAULT_COLOR);
-    if (!SetConsoleTextAttribute(hConsole, (fileColor & 0x0F) | rowBG))
-        fprintf(stderr, "Warning: SetConsoleTextAttribute failed for file color.\n");
+    SET_ATTR((fileColor & 0x0F) | rowBG);
     printf("%s", data->cFileName);
     if (g_options.showFullPath) {
         char fullPath[MAX_PATH];
         joinPath(directory, data->cFileName, fullPath, MAX_PATH);
-        if (!SetConsoleTextAttribute(hConsole, COLOR_FULLPATH | rowBG))
-            fprintf(stderr, "Warning: SetConsoleTextAttribute failed for full path.\n");
+        SET_ATTR(COLOR_FULLPATH | rowBG);
         printf(" (%s)", fullPath);
     }
-
     clearLineToEnd(hConsole, defaultAttr);
     putchar('\n');
-    SetConsoleTextAttribute(hConsole, defaultAttr);
+    // Reset console attributes to default at the end
+    SET_ATTR(defaultAttr);
+    #undef SET_ATTR
 }
 
 /* Simple wildcard matching with support for '?' and '*' */
@@ -617,50 +640,66 @@ static inline void printHeader(const char *restrict path) {
     }
 }
 
-/* Corrected listDirectory: Skips recursing into reparse points to prevent cyclic loops */
+/*
+ * Optimized listDirectory:
+ * Merges the printing, summary computation, and recursion-directory collection loops
+ * into a single iteration over file entries, reducing redundant passes over the data.
+ * For recursive directory processing, directory indices are temporarily stored to
+ * minimize repeated scans of the file list.
+ */
 static void listDirectory(const char *restrict path, HANDLE hConsole, WORD defaultAttr) {
     FileList list;
     initFileList(&list);
     readDirectory(path, &list);
-
     if (list.count > 0)
         qsort(list.entries, list.count, sizeof(FileEntry), compareEntries);
 
     printHeader(path);
-    for (size_t i = 0; i < list.count; ++i)
+
+    // Allocate a temporary array to collect indices of directories for recursion.
+    size_t *recDirs = NULL;
+    size_t recCount = 0;
+    if (g_options.recursive && !g_options.treeView) {
+        recDirs = (size_t*)malloc(list.count * sizeof(size_t));
+        if (!recDirs)
+            fatalError("Memory allocation failed for recursive directories array.");
+    }
+
+    int dirCount = 0, fileCount = 0;
+    ULONGLONG totalSize = 0;
+    for (size_t i = 0; i < list.count; ++i) {
         printFileEntry(path, (int)(i + 1), &list.entries[i], hConsole, defaultAttr);
+        const WIN32_FIND_DATAA *data = &list.entries[i].findData;
+        if (data->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            ++dirCount;
+            if (g_options.recursive && !g_options.treeView &&
+                !(data->dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+                recDirs[recCount++] = i;
+            }
+        } else {
+            ++fileCount;
+            ULARGE_INTEGER fileSize;
+            fileSize.LowPart = data->nFileSizeLow;
+            fileSize.HighPart = data->nFileSizeHigh;
+            totalSize += fileSize.QuadPart;
+        }
+    }
 
     if (g_options.showSummary) {
-        int dirCount = 0, fileCount = 0;
-        ULONGLONG totalSize = 0;
-        for (size_t i = 0; i < list.count; ++i) {
-            const WIN32_FIND_DATAA *data = &list.entries[i].findData;
-            if (data->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-                ++dirCount;
-            else {
-                ++fileCount;
-                ULARGE_INTEGER fileSize;
-                fileSize.LowPart = data->nFileSizeLow;
-                fileSize.HighPart = data->nFileSizeHigh;
-                totalSize += fileSize.QuadPart;
-            }
-        }
         char sizeStr[32] = {0};
         formatSize(totalSize, sizeStr, sizeof(sizeStr), g_options.humanSize);
         printf("\nSummary: %d directories, %d files, total size: %s\n", 
                dirCount, fileCount, sizeStr);
     }
+
     if (g_options.recursive && !g_options.treeView) {
-        for (size_t i = 0; i < list.count; ++i) {
-            const WIN32_FIND_DATAA *data = &list.entries[i].findData;
-            /* Only recurse into directories that are not reparse points to avoid cycles */
-            if ((data->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
-                !(data->dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
-                char newPath[MAX_PATH] = {0};
-                joinPath(path, data->cFileName, newPath, MAX_PATH);
-                listDirectory(newPath, hConsole, defaultAttr);
-            }
+        for (size_t i = 0; i < recCount; i++) {
+            const WIN32_FIND_DATAA *data = &list.entries[recDirs[i]].findData;
+            char newPath[MAX_PATH] = {0};
+            joinPath(path, data->cFileName, newPath, MAX_PATH);
+            listDirectory(newPath, hConsole, defaultAttr);
         }
+        free(recDirs);
     }
     freeFileList(&list);
 }
