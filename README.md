@@ -1,13 +1,16 @@
-# lk - Enhanced Directory Listing for Windows
+# 🚀 lk - Enhanced Directory Listing for Windows
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/itlwas/lk/actions)
-[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License](https://img.shields.io/badge/license-Unlicense-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.5-blue.svg)](https://github.com/itlwas/lk/releases)
-[![Issues](https://img.shields.io/github/issues/itlwas/lk.svg)](https://github.com/itlwas/lk/issues)
 [![Stars](https://img.shields.io/github/stars/itlwas/lk.svg)](https://github.com/itlwas/lk/stargazers)
 [![Forks](https://img.shields.io/github/forks/itlwas/lk.svg)](https://github.com/itlwas/lk/network)
 
-**lk** is a powerful and user-friendly command-line tool for Windows, designed as an enhanced alternative to the standard `dir` or `ls` commands. It offers a comprehensive set of features for listing directories and files with improved readability, sorting, filtering, and advanced customization.
+## 🌟 Overview
+
+**lk** is a powerful and user-friendly command-line tool for Windows, designed as an enhanced alternative to the standard `dir` or `ls` commands.
+
+> **Note:** This project is solely a personal experiment by [itlwas](https://github.com/itlwas) and is not intended for continuous development. It serves as a proof-of-concept rather than a fully evolving product.
 
 ## Table of Contents
 - [Features](#features)
@@ -18,7 +21,7 @@
 - [Command-Line Options](#command-line-options)
 - [License](#license)
 
-## Features
+## ✨ Features
 
 - **Colorized Output**: Easily distinguish file types with intuitive color coding.
 - **Detailed Information**: Display file attributes, human-readable sizes, modification and creation times, and even file ownership.
@@ -32,7 +35,7 @@
 
 > **Note:** The interactive mode feature has been removed due to low usage.
 
-## Installation
+## 🔧 Installation & Compilation
 
 ### Requirements
 
@@ -58,7 +61,7 @@
     ```
 4. **Run**: Execute the compiled executable.
 
-## Usage
+## 📖 Usage
 
 Run `lk` from the command line with the desired options and directories:
 ```bash
@@ -93,9 +96,9 @@ Options:
   -v, --version     Display version information.
 ```
 
-## License
+## 📄 License
 
-This project is licensed under the **MIT License**. See the [LICENSE](LICENSE) file for details.
+This project is licensed under the **Unlicense**. See the [LICENSE](LICENSE) file for details.
 
 ---
 
