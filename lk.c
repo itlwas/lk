@@ -132,9 +132,12 @@ static void initFileList(FileList *list) {
         fatalError("Memory allocation failed for FileList.");
 }
 
-/* Add a file entry; reallocates if needed */
+/* Corrected addFileEntry: Added overflow check before doubling capacity */
 static void addFileEntry(FileList *list, const WIN32_FIND_DATAA *data) {
     if (UNLIKELY(list->count >= list->capacity)) {
+        /* Prevent integer overflow when doubling capacity */
+        if (list->capacity > SIZE_MAX / 2)
+            fatalError("Maximum FileList capacity reached; potential integer overflow.");
         list->capacity *= 2;
         FileEntry *temp = (FileEntry *)realloc(list->entries, list->capacity * sizeof(FileEntry));
         if (UNLIKELY(!temp))
@@ -156,16 +159,24 @@ static inline int fast_tolower(int c) {
     return (c >= 'A' && c <= 'Z') ? (c | 0x20) : c;
 }
 
-/* Join base and child paths; fatal if invalid args */
+/*
+ * joinPath: Safely concatenates the base and child paths into the result buffer.
+ * This revised version captures the return value of snprintf to ensure that the resulting
+ * string fully fits within the provided buffer. If truncation is detected, a fatal error
+ * is raised to prevent subtle path issues that could compromise system integrity.
+ */
 static inline void joinPath(const char *restrict base, const char *restrict child, char *restrict result, size_t size) {
     if (UNLIKELY(!base || !child || !result || size == 0))
         fatalError("Invalid arguments to joinPath.");
     size_t baseLen = strlen(base);
     int needsSlash = (baseLen && (base[baseLen - 1] != '\\' && base[baseLen - 1] != '/'));
+    int written;
     if (needsSlash)
-        snprintf(result, size, "%s\\%s", base, child);
+        written = snprintf(result, size, "%s\\%s", base, child);
     else
-        snprintf(result, size, "%s%s", base, child);
+        written = snprintf(result, size, "%s%s", base, child);
+    if (written < 0 || (size_t)written >= size)
+        fatalError("joinPath: Resulting path was truncated.");
 }
 
 /* Check if filename indicates a binary file by extension */
@@ -184,28 +195,48 @@ static inline int isBinaryFile(const char *restrict filename) {
     return 0;
 }
 
-/* Format file attributes into a short string (e.g., dRHS+A) */
+/* Corrected formatAttributes: Now verifies buffer size and aborts if insufficient */
 static inline void formatAttributes(DWORD attr, int isDir, char *restrict outStr, size_t size) {
-    if (size < 6) return;
-    outStr[0] = isDir ? 'd' : '-';
-    outStr[1] = (attr & FILE_ATTRIBUTE_READONLY) ? 'R' : '-';
-    outStr[2] = (attr & FILE_ATTRIBUTE_HIDDEN)   ? 'H' : '-';
-    outStr[3] = (attr & FILE_ATTRIBUTE_SYSTEM)     ? 'S' : '-';
-    outStr[4] = (attr & FILE_ATTRIBUTE_ARCHIVE)    ? 'A' : '-';
+    /* Enforce a minimum buffer size of 6 to safely store attributes */
+    if (size < 6)
+        fatalError("Buffer size too small in formatAttributes; expected at least 6 characters.");
+
+    static const char flags[5] = { 'd', 'R', 'H', 'S', 'A' };
+    static const DWORD masks[5] = { 
+        0,  /* Directory is handled separately */
+        FILE_ATTRIBUTE_READONLY,
+        FILE_ATTRIBUTE_HIDDEN,
+        FILE_ATTRIBUTE_SYSTEM,
+        FILE_ATTRIBUTE_ARCHIVE
+    };
+
+    outStr[0] = isDir ? flags[0] : '-';
+    outStr[1] = (attr & masks[1]) ? flags[1] : '-';
+    outStr[2] = (attr & masks[2]) ? flags[2] : '-';
+    outStr[3] = (attr & masks[3]) ? flags[3] : '-';
+    outStr[4] = (attr & masks[4]) ? flags[4] : '-';
     outStr[5] = '\0';
 }
 
-/* Convert FILETIME to "YYYY-MM-DD HH:MM:SS" format */
+/*
+ * fileTimeToString: Converts a FILETIME structure to a human-readable string in "YYYY-MM-DD HH:MM:SS" format.
+ * This updated version first verifies that the provided buffer is large enough (at least 20 characters)
+ * to hold the formatted string. It then checks the snprintf return value to ensure no truncation occurs,
+ * thereby safeguarding against potential data corruption under edge-case conditions.
+ */
 static void fileTimeToString(const FILETIME *ft, char *restrict buffer, size_t size) {
+    if (size < 20)
+        fatalError("Buffer size too small in fileTimeToString; expected at least 20 characters.");
     SYSTEMTIME stUTC, stLocal;
     if (!FileTimeToSystemTime(ft, &stUTC))
         fatalError("FileTimeToSystemTime failed.");
     if (!SystemTimeToTzSpecificLocalTime(NULL, &stUTC, &stLocal))
         fatalError("SystemTimeToTzSpecificLocalTime failed.");
-    if (size >= 20)
-        snprintf(buffer, size, "%04d-%02d-%02d %02d:%02d:%02d",
+    int written = snprintf(buffer, size, "%04d-%02d-%02d %02d:%02d:%02d",
                  stLocal.wYear, stLocal.wMonth, stLocal.wDay,
                  stLocal.wHour, stLocal.wMinute, stLocal.wSecond);
+    if (written < 0 || (size_t)written >= size)
+        fatalError("fileTimeToString: Resulting string was truncated.");
 }
 
 /* Format file size; scale to human-readable units if requested */
@@ -214,72 +245,131 @@ static void formatSize(ULONGLONG size, char *restrict buffer, size_t bufferSize,
         snprintf(buffer, bufferSize, "%llu", size);
         return;
     }
-    const char *suffixes[] = { "B", "K", "M", "G", "T", "P" };
+    
+    /* Use a compile-time array of suffix strings */
+    static const char *suffixes[6] = { "B", "K", "M", "G", "T", "P" };
+    
+    /* Use integer scaling for values under threshold to avoid floating point */
+    if (size < 1024) {
+        snprintf(buffer, bufferSize, "%llu%s", size, suffixes[0]);
+        return;
+    }
+    
+    /* Find appropriate unit with binary division */
     int i = 0;
     double s = (double)size;
-    while (s >= 1024 && i < 5) { s /= 1024; i++; }
+    
+    /* Unroll this loop for common cases */
+    if (s >= 1024) { s /= 1024; i++; }  /* KB */
+    if (s >= 1024) { s /= 1024; i++; }  /* MB */
+    if (s >= 1024) { s /= 1024; i++; }  /* GB */
+    if (s >= 1024 && i < 4) { s /= 1024; i++; }  /* TB */
+    if (s >= 1024 && i < 5) { s /= 1024; i++; }  /* PB */
+    
+    /* Format with one decimal place */
     snprintf(buffer, bufferSize, "%.1f%s", s, suffixes[i]);
 }
 
 /* Natural (human-friendly) string comparison */
 static int naturalCompare(const char *restrict a, const char *restrict b) {
-    while (*a && *b) {
-        if (isdigit((unsigned char)*a) && isdigit((unsigned char)*b)) {
+    const unsigned char *ua = (const unsigned char *)a;
+    const unsigned char *ub = (const unsigned char *)b;
+    
+    while (*ua && *ub) {
+        if (isdigit(*ua) && isdigit(*ub)) {
+            /* Fast path for common case of single-digit numbers */
+            if (!isdigit(ua[1]) && !isdigit(ub[1])) {
+                if (*ua != *ub)
+                    return *ua - *ub;
+                ua++; ub++;
+                continue;
+            }
+            
+            /* Parse multiple-digit numbers efficiently */
             unsigned long numA = 0, numB = 0;
-            while (isdigit((unsigned char)*a))
-                numA = numA * 10 + (*a++ - '0');
-            while (isdigit((unsigned char)*b))
-                numB = numB * 10 + (*b++ - '0');
+            do { numA = numA * 10 + (*ua++ - '0'); } while (isdigit(*ua));
+            do { numB = numB * 10 + (*ub++ - '0'); } while (isdigit(*ub));
+            
             if (numA != numB)
                 return (numA < numB) ? -1 : 1;
         } else {
-            int ca = fast_tolower((unsigned char)*a);
-            int cb = fast_tolower((unsigned char)*b);
+            /* Use direct lowercase table lookup instead of function call */
+            unsigned char ca = (*ua >= 'A' && *ua <= 'Z') ? (*ua | 0x20) : *ua;
+            unsigned char cb = (*ub >= 'A' && *ub <= 'Z') ? (*ub | 0x20) : *ub;
+            
             if (ca != cb)
                 return ca - cb;
-            a++; 
-            b++;
+            ua++; ub++;
         }
     }
-    return (*a) ? 1 : ((*b) ? -1 : 0);
+    
+    return (*ua) ? 1 : ((*ub) ? -1 : 0);
 }
 
 /* Compare two FileEntry items with support for various sort options */
 static int compareEntries(const void *a, const void *b) {
     const FileEntry *fa = (const FileEntry *)a;
     const FileEntry *fb = (const FileEntry *)b;
-    int aIsDir = (fa->findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-    int bIsDir = (fb->findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+    const DWORD attrA = fa->findData.dwFileAttributes;
+    const DWORD attrB = fb->findData.dwFileAttributes;
+    const int aIsDir = (attrA & FILE_ATTRIBUTE_DIRECTORY) != 0;
+    const int bIsDir = (attrB & FILE_ATTRIBUTE_DIRECTORY) != 0;
 
+    /* Fast path for directory grouping */
     if (g_options.groupDirs && aIsDir != bIsDir)
         return aIsDir ? -1 : 1;
 
+    /* Time-based sorting */
     if (g_options.sortByTime) {
-        ULONGLONG ta = (((ULONGLONG)fa->findData.ftLastWriteTime.dwHighDateTime << 32) |
-                         fa->findData.ftLastWriteTime.dwLowDateTime);
-        ULONGLONG tb = (((ULONGLONG)fb->findData.ftLastWriteTime.dwHighDateTime << 32) |
-                         fb->findData.ftLastWriteTime.dwLowDateTime);
-        if (ta != tb)
-            return g_options.reverseSort ? ((ta < tb) ? 1 : -1) : ((ta < tb) ? -1 : 1);
+        /* Direct 64-bit composition instead of bit shifting */
+        ULONGLONG ta = (((ULONGLONG)fa->findData.ftLastWriteTime.dwHighDateTime) << 32) | 
+                         fa->findData.ftLastWriteTime.dwLowDateTime;
+        ULONGLONG tb = (((ULONGLONG)fb->findData.ftLastWriteTime.dwHighDateTime) << 32) | 
+                         fb->findData.ftLastWriteTime.dwLowDateTime;
+        
+        if (ta != tb) {
+            /* Combine conditional with return to eliminate branch */
+            int result = (ta < tb) ? -1 : 1;
+            return g_options.reverseSort ? -result : result;
+        }
     }
+    
+    /* Size-based sorting */
     if (g_options.sortBySize) {
-        ULONGLONG sa = (((ULONGLONG)fa->findData.nFileSizeHigh << 32) | fa->findData.nFileSizeLow);
-        ULONGLONG sb = (((ULONGLONG)fb->findData.nFileSizeHigh << 32) | fb->findData.nFileSizeLow);
-        if (sa != sb)
-            return g_options.reverseSort ? ((sa < sb) ? 1 : -1) : ((sa < sb) ? -1 : 1);
+        ULONGLONG sa = (((ULONGLONG)fa->findData.nFileSizeHigh) << 32) | fa->findData.nFileSizeLow;
+        ULONGLONG sb = (((ULONGLONG)fb->findData.nFileSizeHigh) << 32) | fb->findData.nFileSizeLow;
+        
+        if (sa != sb) {
+            int result = (sa < sb) ? -1 : 1;
+            return g_options.reverseSort ? -result : result;
+        }
     }
+    
+    /* Extension-based sorting - only do string operations if needed */
     if (g_options.sortByExtension) {
         const char *extA = strrchr(fa->findData.cFileName, '.');
         const char *extB = strrchr(fb->findData.cFileName, '.');
-        if (extA && extB) {
+        
+        /* Handle various extension cases efficiently */
+        if (!extA && !extB) {
+            /* No extensions, fall through to name comparison */
+        } else if (extA && !extB) {
+            return g_options.reverseSort ? -1 : 1;
+        } else if (!extA && extB) {
+            return g_options.reverseSort ? 1 : -1;
+        } else {
             int result = _stricmp(extA, extB);
-            if (result)
+            if (result) {
                 return g_options.reverseSort ? -result : result;
+            }
         }
     }
+    
+    /* Name-based sorting as fallback */
     int result = g_options.naturalSort ?
                  naturalCompare(fa->findData.cFileName, fb->findData.cFileName) :
                  _stricmp(fa->findData.cFileName, fb->findData.cFileName);
+                 
     return g_options.reverseSort ? -result : result;
 }
 
@@ -380,62 +470,103 @@ static void printFileEntry(const char *restrict directory, int index, const File
 
 /* Simple wildcard matching with support for '?' and '*' */
 static int wildcardMatch(const char *restrict pattern, const char *restrict str) {
-    const char *star = NULL;
-    const char *s = str, *p = pattern;
+    /* Fast path for exact matching or empty pattern */
+    if (!pattern[0]) return !str[0];
+    if (!str[0]) return pattern[0] == '*' && !pattern[1];
+    
+    /* Use more efficient pointer tracking for pattern matching */
+    const char *s = str;
+    const char *p = pattern;
+    const char *star_p = NULL;
+    const char *star_s = NULL;
+    
     while (*s) {
-        if (*p == '?' || fast_tolower((unsigned char)*p) == fast_tolower((unsigned char)*s)) {
+        /* Direct char match or single wildcard */
+        if (*p == '?' || ((*p | 0x20) == (*s | 0x20))) {
             p++;
             s++;
-        } else if (*p == '*') {
-            star = p++;
-        } else if (star) {
-            p = star + 1;
-            s++;
-        } else {
+        }
+        /* Star wildcard handling with backtracking information */
+        else if (*p == '*') {
+            star_p = p++;
+            star_s = s;
+            /* Skip consecutive stars - they're redundant */
+            while (*p == '*') p++;
+            if (!*p) return 1; /* Trailing star matches everything */
+        }
+        /* Backtrack to last star if available */
+        else if (star_p) {
+            p = star_p + 1;
+            s = ++star_s;
+        }
+        else {
             return 0;
         }
     }
-    while (*p == '*')
-        p++;
-    return (*p == '\0');
+    
+    /* Skip any trailing stars */
+    while (*p == '*') p++;
+    
+    return !*p;
 }
 
-/* Read directory entries matching the filter pattern into FileList */
+/* Corrected readDirectory: Uses safe string copies and bounds checks for wildcard and directory names */
 static void readDirectory(const char *restrict path, FileList *list) {
     char directory[MAX_PATH] = {0};
     char wildcard[256] = {0};
+    int hasWildcard = (strchr(path, '*') || strchr(path, '?'));
 
-    if (strchr(path, '*') || strchr(path, '?')) {
+    if (hasWildcard) {
         const char *sep = strrchr(path, '\\');
-        if (!sep)
-            sep = strrchr(path, '/');
+        if (!sep) sep = strrchr(path, '/');
         if (sep) {
             size_t dirLen = sep - path;
-            if (dirLen >= MAX_PATH)
-                dirLen = MAX_PATH - 1;
+            if (dirLen >= MAX_PATH) {
+                dirLen = MAX_PATH - 1; /* Truncate to avoid overflow */
+                fprintf(stderr, "Warning: Directory path truncated to %d characters: '%s'\n", MAX_PATH - 1, path);
+            }
             memcpy(directory, path, dirLen);
             directory[dirLen] = '\0';
+            /* Safely copy the wildcard pattern */
             strncpy(wildcard, sep + 1, sizeof(wildcard) - 1);
             wildcard[sizeof(wildcard) - 1] = '\0';
         } else {
-            strcpy(directory, ".");
+            strncpy(directory, ".", MAX_PATH - 1);
+            directory[MAX_PATH - 1] = '\0';
             strncpy(wildcard, path, sizeof(wildcard) - 1);
             wildcard[sizeof(wildcard) - 1] = '\0';
         }
     } else {
-        strcpy(directory, path);
-        if (g_options.filterPattern[0])
+        size_t pathLen = strlen(path);
+        if (pathLen >= MAX_PATH) {
+            pathLen = MAX_PATH - 1; /* Truncate to avoid overflow */
+            fprintf(stderr, "Warning: Path truncated to %d characters: '%s'\n", MAX_PATH - 1, path);
+        }
+        strncpy(directory, path, pathLen);
+        directory[pathLen] = '\0';
+        /* Safely apply the global filter pattern if specified */
+        if (g_options.filterPattern[0]) {
             strncpy(wildcard, g_options.filterPattern, sizeof(wildcard) - 1);
-        else
-            wildcard[0] = '\0';
+            wildcard[sizeof(wildcard) - 1] = '\0';
+        }
     }
 
     char searchPath[MAX_PATH];
-    snprintf(searchPath, sizeof(searchPath), "%s\\*", directory);
+    size_t dirLen = strlen(directory);
+    if (dirLen > 0 && directory[dirLen - 1] != '\\')
+        snprintf(searchPath, sizeof(searchPath), "%s\\*", directory);
+    else
+        snprintf(searchPath, sizeof(searchPath), "%s*", directory);
 
     WIN32_FIND_DATAA findData;
-    HANDLE hFind = FindFirstFileExA(searchPath, FindExInfoStandard, &findData,
-                                     FindExSearchNameMatch, NULL, FIND_FIRST_EX_LARGE_FETCH);
+    HANDLE hFind = FindFirstFileExA(
+        searchPath,
+        FindExInfoBasic,         /* Use basic info for performance */
+        &findData,
+        FindExSearchNameMatch,
+        NULL,
+        FIND_FIRST_EX_LARGE_FETCH /* Optimize for large directories */
+    );
     if (hFind == INVALID_HANDLE_VALUE) {
         fprintf(stderr, "Error: Unable to open directory '%s' (Error code: %lu)\n", directory, GetLastError());
         return;
@@ -443,17 +574,23 @@ static void readDirectory(const char *restrict path, FileList *list) {
 
     const size_t wildcardLen = strlen(wildcard);
     do {
-        /* Skip "." and ".." */
+        /* Skip current and parent directory entries */
         if (findData.cFileName[0] == '.' &&
-           (findData.cFileName[1] == '\0' ||
-            (findData.cFileName[1] == '.' && findData.cFileName[2] == '\0')))
+            (findData.cFileName[1] == '\0' ||
+             (findData.cFileName[1] == '.' && findData.cFileName[2] == '\0')))
             continue;
+
+        /* Filter out hidden files unless showAll is enabled */
         if (!g_options.showAll && (findData.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN))
             continue;
+
+        /* Apply wildcard filter if present */
         if (wildcardLen && !wildcardMatch(wildcard, findData.cFileName))
             continue;
+
         addFileEntry(list, &findData);
     } while (FindNextFileA(hFind, &findData));
+
     FindClose(hFind);
 }
 
@@ -480,7 +617,7 @@ static inline void printHeader(const char *restrict path) {
     }
 }
 
-/* List directory entries with sorting and optional recursion */
+/* Corrected listDirectory: Skips recursing into reparse points to prevent cyclic loops */
 static void listDirectory(const char *restrict path, HANDLE hConsole, WORD defaultAttr) {
     FileList list;
     initFileList(&list);
@@ -516,7 +653,9 @@ static void listDirectory(const char *restrict path, HANDLE hConsole, WORD defau
     if (g_options.recursive && !g_options.treeView) {
         for (size_t i = 0; i < list.count; ++i) {
             const WIN32_FIND_DATAA *data = &list.entries[i].findData;
-            if (data->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            /* Only recurse into directories that are not reparse points to avoid cycles */
+            if ((data->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
+                !(data->dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
                 char newPath[MAX_PATH] = {0};
                 joinPath(path, data->cFileName, newPath, MAX_PATH);
                 listDirectory(newPath, hConsole, defaultAttr);
@@ -541,8 +680,12 @@ static void listDirectorySelf(const char *restrict path, HANDLE hConsole, WORD d
     printFileEntry(path, 1, &entry, hConsole, defaultAttr);
 }
 
-/* Recursively print directory structure in tree view */
+/* Corrected treeDirectory: Adds recursion depth limit and skips reparse points to ensure system resilience */
 static void treeDirectory(const char *restrict path, HANDLE hConsole, WORD defaultAttr, int indent) {
+    /* Limit recursion depth to avoid potential stack overflow */
+    if (indent >= 31)
+        return;
+
     FileList list;
     initFileList(&list);
     readDirectory(path, &list);
@@ -562,7 +705,9 @@ static void treeDirectory(const char *restrict path, HANDLE hConsole, WORD defau
     if (g_options.recursive) {
         for (size_t i = 0; i < list.count; i++) {
             const WIN32_FIND_DATAA *data = &list.entries[i].findData;
-            if (data->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            /* Prevent recursion into reparse points to avoid cyclic directory traversal */
+            if ((data->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
+                !(data->dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
                 char newPath[MAX_PATH];
                 joinPath(path, data->cFileName, newPath, MAX_PATH);
                 printf("%s|\n", indentBuf);
@@ -616,6 +761,7 @@ int getFileOwner(const char *filePath, char *owner, DWORD ownerSize) {
     return 1;
 }
 
+/* Main entry point for the directory listing utility */
 int main(int argc, char *argv[]) {
     const char *helpText =
         "\nUsage: lk [options] [path ...]\n\n"
@@ -649,6 +795,8 @@ int main(int argc, char *argv[]) {
     char **files = (char **)malloc(filesCapacity * sizeof(*files));
     if (!files)
         fatalError("Memory allocation failed for files array.");
+
+    /* Parse command-line arguments to set options and collect paths */
     for (int i = 1; i < argc; i++) {
         if (argv[i][0] == '-') {
             if (argv[i][1] == '-') {
@@ -713,27 +861,39 @@ int main(int argc, char *argv[]) {
             }
         } else {
             if (fileCount >= filesCapacity) {
+                /* Check for potential overflow before doubling capacity */
+                if (filesCapacity > SIZE_MAX / 2) {
+                    fprintf(stderr, "Error: Maximum file capacity reached.\n");
+                    free(files);
+                    return EXIT_FAILURE;
+                }
                 filesCapacity *= 2;
                 char **temp = (char **)realloc(files, filesCapacity * sizeof(*files));
-                if (!temp)
-                    fatalError("Memory reallocation failed for files array.");
+                if (!temp) {
+                    fprintf(stderr, "Error: Memory reallocation failed.\n");
+                    free(files);
+                    return EXIT_FAILURE;
+                }
                 files = temp;
             }
             files[fileCount++] = argv[i];
         }
     }
 
-    /* Use current directory if no paths provided */
+    /* Default to current directory if no paths specified */
     if (fileCount == 0) {
         files[0] = ".";
         fileCount = 1;
     }
+
+    /* Allocate block for absolute paths to improve memory locality */
     char *absPathsBlock = (char *)malloc(fileCount * MAX_PATH);
     if (!absPathsBlock) {
         free(files);
         fatalError("Memory allocation failed for absolute paths block.");
     }
 
+    /* Convert all paths to absolute paths */
     for (int i = 0; i < fileCount; i++) {
         char *absPath = absPathsBlock + i * MAX_PATH;
         if (!GetFullPathNameA(files[i], MAX_PATH, absPath, NULL)) {
@@ -743,12 +903,18 @@ int main(int argc, char *argv[]) {
     }
     free(files);
 
+    /* Initialize console handle and default attributes */
     HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
     CONSOLE_SCREEN_BUFFER_INFO csbi;
-    if (!GetConsoleScreenBufferInfo(hConsole, &csbi))
-        csbi.wAttributes = GRAY_TEXT;
-    const WORD defaultAttr = csbi.wAttributes;
+    WORD defaultAttr;
+    if (!GetConsoleScreenBufferInfo(hConsole, &csbi)) {
+        defaultAttr = GRAY_TEXT; /* Fallback to gray if console info unavailable */
+        fprintf(stderr, "Warning: Failed to get console buffer info (Error code: %lu)\n", GetLastError());
+    } else {
+        defaultAttr = csbi.wAttributes;
+    }
 
+    /* Process each path according to options */
     for (int i = 0; i < fileCount; i++) {
         char *currentPath = absPathsBlock + i * MAX_PATH;
         if (fileCount > 1)
@@ -764,6 +930,7 @@ int main(int argc, char *argv[]) {
         if (i < fileCount - 1)
             printf("\n");
     }
+
     free(absPathsBlock);
     return EXIT_SUCCESS;
 }
